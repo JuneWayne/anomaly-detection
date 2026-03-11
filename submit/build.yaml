@@ -1,1 +1,157 @@
 # cloudformation solution goes here
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Anomaly Detection Pipeline CloudFormation Template for DS5220
+
+Resources:
+  # s3 bucket to store anomaly results
+  AnomalyBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: AnomalySNSTopicPolicy
+    Properties:
+      BucketName: !Sub "ds5220-anomaly-${AWS::AccountId}"
+      NotificationConfiguration:
+        TopicConfigurations:
+          - Event: "s3:ObjectCreated:*"
+            Topic: !Ref AnomalySNSTopic
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: "raw/"
+                  - Name: suffix
+                    Value: ".csv"
+
+  # IAM role for EC2 instance to access S3 bucket
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+
+  # IAM policy to allow EC2 instance to read/write to S3 bucket
+  EC2Policy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: AnomalyBucketFullAccess
+      Roles:
+        - !Ref EC2Role
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: "s3:*"
+            Resource:
+              - !GetAtt AnomalyBucket.Arn
+              - !Sub "${AnomalyBucket.Arn}/*"
+
+  # EC2 Instance Profile
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EC2Role
+
+  # security group
+  AnomalySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH from current IP and API from anywhere
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 216.197.71.208/32
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: 0.0.0.0/0
+
+  # EC2 Instance
+  AnomalyInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-0b6c6ebed2801a5cb
+      InstanceType: t3.micro
+      KeyName: ds5220-keypair
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      SecurityGroups:
+        - !Ref AnomalySecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 16
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+
+          # setting bucket name as env variable
+          export BUCKET_NAME="${AnomalyBucket}"
+          echo "BUCKET_NAME=${AnomalyBucket}" >> /etc/environment
+
+          # Install dependencies
+          apt-get update -y
+          apt-get install -y git python3 python3-pip python3-venv
+
+          # cloning repo
+          git clone https://github.com/JuneWayne/anomaly-detection.git /opt/anomaly-detection
+
+          # create virtual environment and install requirements.txt
+          python3 -m venv /opt/anomaly-detection/venv
+          /opt/anomaly-detection/venv/bin/pip install --upgrade pip
+          /opt/anomaly-detection/venv/bin/pip install -r /opt/anomaly-detection/requirements.txt
+
+          # start fastapi app
+          cd /opt/anomaly-detection
+          nohup /opt/anomaly-detection/venv/bin/fastapi run app.py --host 0.0.0.0 --port 8000 \
+            > /var/log/anomaly.log 2>&1 &
+
+  # elastic ip
+  AnomalyEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref AnomalyInstance
+
+  # sns topic
+  AnomalySNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: ds5220-dp1
+
+  # sns topic policy
+  AnomalySNSTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref AnomalySNSTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: s3.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref AnomalySNSTopic
+
+  # sns subscription
+  AnomalySNSSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref AnomalySNSTopic
+      Protocol: http
+      Endpoint: !Sub "http://${AnomalyEIP}:8000/notify"
+
+Outputs:
+  BucketName:
+    Value: !Ref AnomalyBucket
+  InstancePublicIP:
+    Value: !Ref AnomalyEIP
+  APIEndpoint:
+    Value: !Sub "http://${AnomalyEIP}:8000"
+  SNSTopicArn:
+    Value: !Ref AnomalySNSTopic
