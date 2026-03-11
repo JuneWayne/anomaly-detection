@@ -2,7 +2,6 @@
 import numpy as np
 import pandas as pd
 from pyparsing import col
-from pyparsing import col
 from sklearn.ensemble import IsolationForest
 from typing import Optional
 import logging
@@ -46,7 +45,7 @@ class AnomalyDetector:
             labels = model.predict(X)          # -1 = anomaly, 1 = normal
             scores = model.decision_function(X)  # lower = more anomalous
             print(f"IsolationForest fit on {len(X)} rows, {len(numeric_cols)} features")
-            logger.info(f"isolationforest fit on {len(x)} rows, {len(numeric_cols)} features")
+            logger.info(f"isolationforest fit on {len(X)} rows, {len(numeric_cols)} features")
             return labels, scores
         except Exception as e:
             logger.error(f"IsolationForest failed: {e}")
@@ -64,20 +63,21 @@ class AnomalyDetector:
 
         # --- Z-score per channel ---
         if method in ("zscore", "both"):
-            try:
-                stats = baseline.get(col)
-                if stats and stats["count"] >= 30:
-                    z_scores = self.zscore_flag(df[col], stats["mean"], stats["std"])
-                    result[f"{col}_zscore"] = z_scores.round(4)
-                    result[f"{col}_zscore_flag"] = z_scores > self.z_threshold
-                    logger.info(f"Z-score computed for '{col}'.")
-                else:
-                    result[f"{col}_zscore"] = None
-                    result[f"{col}_zscore_flag"] = None
-                    logger.info(f"Skipping z-score for '{col}' — insufficient baseline history.")
-            except Exception as e:
-                logger.error(f"Z-score calculation failed for column '{col}': {e}")
-                print(f"ERROR in z-score for {col}: {e}")
+            for method in ("zscore", "both"):
+                try:
+                    stats = baseline.get(col)
+                    if stats and stats["count"] >= 30:
+                        z_scores = self.zscore_flag(df[col], stats["mean"], stats["std"])
+                        result[f"{col}_zscore"] = z_scores.round(4)
+                        result[f"{col}_zscore_flag"] = z_scores > self.z_threshold
+                        logger.info(f"Z-score computed for '{col}'.")
+                    else:
+                        result[f"{col}_zscore"] = None
+                        result[f"{col}_zscore_flag"] = None
+                        logger.info(f"Skipping z-score for '{col}' — insufficient baseline history.")
+                except Exception as e:
+                    logger.error(f"Z-score calculation failed for column '{col}': {e}")
+                    print(f"ERROR in z-score for {col}: {e}")
 
         # --- IsolationForest across all channels ---
         if method in ("isolation", "both"):
