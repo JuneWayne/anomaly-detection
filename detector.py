@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import numpy as np
 import pandas as pd
-from pyparsing import col
 from sklearn.ensemble import IsolationForest
 from typing import Optional
 import logging
@@ -63,7 +62,7 @@ class AnomalyDetector:
 
         # --- Z-score per channel ---
         if method in ("zscore", "both"):
-            for method in ("zscore", "both"):
+            for col in numeric_cols:
                 try:
                     stats = baseline.get(col)
                     if stats and stats["count"] >= 30:

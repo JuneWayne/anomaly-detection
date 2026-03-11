@@ -22,7 +22,7 @@ logging.basicConfig(
     ],
 )
 
-
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Anomaly Detection Pipeline")
 
